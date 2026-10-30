@@ -1,0 +1,34 @@
+# 依赖
+node_modules/
+node_modules
+**/node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Remotion 装配产物与缓存
+public/
+out/
+.remotion/
+
+# 本地演示片（体积大，且含歌曲版权，不进库）
+preview/
+*.mp4
+*.mov
+
+# 媒体（歌曲/歌词/素材不进库）
+*.ncm
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.lrc
+*.srt
+
+# 本机私有配置（python 路径等）
+mv.local.sh
+
+# 系统
+.DS_Store
