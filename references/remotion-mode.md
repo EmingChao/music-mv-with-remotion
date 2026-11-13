@@ -52,7 +52,7 @@ remotion/MV.tsx  ── 按顺序 <script> 注入 → await window.sceneReady
 
 - `MV.tsx` 里先渲染 `<canvas id="c" width={ow} height={oh}>`，`assemble.js` 会直接用它（它先找 `#c`，找不到才自己建）。
 - 画完在 `useLayoutEffect` 里同步发生，Remotion 截图时画面已是最新 → 帧准。
-- **像素风**：`ow/oh` 是输出尺寸（1920×1080），`w/h` 是世界里的小画布（320×180），别弄反。
+- **像素风**：`ow/oh` 是输出尺寸（1920×1080），`w/h` 是世界里的小画布（新工程默认 640×360），别弄反。
 - Studio 热更新会复用页面，`MV.tsx` 每次挂载前清 `window.SHOTS/ENGINE/...`，否则镜头会翻倍。
 
 ---
@@ -113,3 +113,5 @@ remotion/MV.tsx  ── 按顺序 <script> 注入 → await window.sceneReady
 | 依赖 | puppeteer-core | puppeteer-core + remotion + react（`npm install`） |
 
 主分支不受本分支影响：两条管线共用同一套 `engine.js` / `character.js` / `assemble.js` 契约，工程目录可以互相搬。
+
+若接触表正常、播放时却有一帧花屏，在相邻几帧之间检查片名、纹理是否出现重复平铺。可用同一工程的逐帧管线输出作对照；本机模板等画布就绪并绘制首帧后才放行截图。

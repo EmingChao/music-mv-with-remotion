@@ -12,6 +12,7 @@ __pycache__/
 public/
 out/
 .remotion/
+remotion/project.gen.json
 
 # 本地演示片（体积大，且含歌曲版权，不进库）
 preview/

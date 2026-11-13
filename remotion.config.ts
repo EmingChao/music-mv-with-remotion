@@ -10,4 +10,6 @@ Config.setOverwriteOutput(true);
 Config.setConcurrency(2);          // 16G 机器：每个标签页都要预烘纸纹/调色板，2 个够
 Config.setChromiumOpenGlRenderer('angle');
 // 关掉 webpack 缓存：单次渲染只快 0–2 秒，却会在 node_modules/.cache 里堆 200–350MB
-try { Config.setWebpackCaching(false); } catch (e) { /* 旧版本没有这个 API 时忽略 */ }
+if ('setWebpackCaching' in Config && typeof Config.setWebpackCaching === 'function') {
+  Config.setWebpackCaching(false);
+}

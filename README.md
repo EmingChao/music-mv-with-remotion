@@ -1,11 +1,19 @@
 # music-mv-with-remotion（实验分支）
 
-把一首歌做成有画面的 MV —— 三种画风（像素游戏 / 纸艺拼贴 / 蜡笔绘本），画面由代码逐帧画出来。
-本分支在 [`music-mv`](https://github.com/EmingChao/music-mv) 的基础上多了一条 **Remotion 壳**：
-Remotion 负责"时钟 + 音轨 + 预览器"，画面仍然由 canvas 画。
+把一首歌做成可拖时间轴、可带声预览和可分段渲染的代码 MV。像素、纸艺拼贴和蜡笔绘本共用同一套工程契约，Remotion 负责时间、音轨、预览和最终编码，画面由 Canvas 逐帧绘制。
 
-- 主分支：[`music-mv`](https://github.com/EmingChao/music-mv)（单路线 Puppeteer 逐帧），本分支**不改动**它
-- 两者共用同一套 `engine.js` / `character.js` / `assemble.js` 契约，工程目录可以互相搬
+- 两条技能共用 `engine.js`、`character.js`、`assemble.js` 的工程契约，工程可以在两条渲染入口之间复用
+- 每首歌可重新设计角色、场景、镜头、色阶和字幕。模板里的排练镜头只用于验证接口
+
+默认像素工程是 640×360 世界画布到 1920×1080 输出。也可以选择 320×180、1280×720 或 1920×1080 原生世界画布。`init` 会生成带 `rehearsal: true` 的排练镜头，正式制作要按本曲分镜替换，并检查工程中没有 `rehearsal: true`。
+
+| 世界画布 | 画面特点 | 适用镜头 |
+|---|---|---|
+| `320×180` | 颗粒最大，轮廓强 | 剪影、远景、强图形 |
+| `640×360` | 细节与渲染成本平衡 | 人物、道具、分层建筑 |
+| `1280×720` | 小动作和材质更清楚 | 复杂服装、密集前后景 |
+| `1920×1080` | 原生 1080p 像素绘制 | 需要细节的特写和复杂场景 |
+
 
 ```bash
 git clone https://github.com/EmingChao/music-mv-with-remotion.git ~/.agents/skills/music-mv-with-remotion
@@ -23,6 +31,7 @@ bash mv.sh init work/my-mv --style=pixel --w=1920 --h=1080 --bpm=92 --dur=180
 bash mv.sh ncm ~/Music/song.ncm                  # 网易云加密壳先还原（转调 ncm2mp3）
 bash mv.sh analyze ~/Music/song.mp3              # BPM / 拍位 / 段落
 bash mv.sh lyric ~/Music/song.lrc                # 歌词 → lyrics.js
+bash mv.sh storyboard work/my-mv                # 生成可编辑的全曲分镜草稿
 bash mv.sh check work/my-mv                      # 静态自检（接线/首尾相接/CFG 语法/歌词轴）
 
 # —— 默认管线（Puppeteer 逐帧）——
@@ -58,7 +67,7 @@ cd ~/.agents/skills/music-mv-with-remotion && npm install
 - 用 Remotion 模式：需要 `remotion@4.0.539` + `@remotion/cli` + `react@19`（`package.json` 已钉住）
 - `remotion.config.ts` 里写死了 macOS 的 Chrome 路径（省下载 headless shell），换机器删掉那一行
 
-## 实测数字（1920×1080 / 30fps / 180 帧 = 6 秒）
+## 性能参考（不同机器会有差异）
 
 | 画风 | Remotion 模式 | 默认 puppeteer 模式 |
 |---|---|---|
@@ -91,7 +100,7 @@ cd ~/.agents/skills/music-mv-with-remotion && npm install
 ## 已知限制
 
 - Remotion 只直通混音，**不做响度归一**，发平台前要跑 `rmaster`
-- 没有 whisper，**词级时间戳**目前靠"按字均匀分配"（`charsOf`），说唱咬字极密时可手动改 `lyrics.js` 的句边界
+- 没有 whisper 时，普通 LRC 的词级时间戳靠句内字数估算（`charsOf`）。增强型逐字 LRC 当前也需要在工程中补充人工确认的字级时间，说唱咬字极密时应手动修正
 - 并发标签页各自预烘纸纹/调色板，内存 ×N；16G 机器建议 `rrender --concurrency=2`
 - 断点续渲靠 `--frames=a-b` 手工分段（默认管线的 `render` 是自动续的）
 - Remotion 许可是 Remotion License（非 MIT），商用前自行确认

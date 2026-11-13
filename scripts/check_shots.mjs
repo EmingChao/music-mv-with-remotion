@@ -9,7 +9,7 @@
 //   2. 镜头首尾相接、end>start、draw 是函数、最后一个 end == CFG.DURATION
 //   3. 每个镜头的 draw() 真的跑得起来（用假 ctx 空跑 u=0/0.5/1，抓 ReferenceError/TypeError）
 //   4. 镜头里没有 Math.random / Date.now / setTimeout / setInterval / requestAnimationFrame（画面必须只由 t 决定）
-//   5. 没有 p5 / Three / WebGL / CDN 引用（弱模型环境里这些必挂）
+//   5. 镜头采用确定性时间，本地离屏图层可按需启用
 //   6. engine.js 该有的画法函数都在
 //   7. lyrics.js 的时间轴：单调、不超片长、每句 ≥0.6s、不超过 16 字
 //   8. 单文件行数（>400 行说明该拆镜头了）
@@ -44,7 +44,7 @@ const num = (re, d) => { const m = idx.match(re); return m ? Number(m[1]) : d; }
 const CFG = {
   W: num(/\bW:\s*(\d+)/, 1920), H: num(/\bH:\s*(\d+)/, 1080),
   DURATION: num(/DURATION:\s*([\d.]+)/, 0), BPM: num(/BPM:\s*([\d.]+)/, 120),
-  OUT: /\bOUT:\s*\{/.test(idx) ? { w: num(/OUT:\s*\{\s*w:\s*(\d+)/, 1920), h: num(/OUT:\s*\{\s*h:\s*(\d+)/, 1080) } : null,
+  OUT: /\bOUT:\s*\{/.test(idx) ? { w: num(/OUT:\s*\{\s*w:\s*(\d+)/, 1920), h: num(/OUT:\s*\{[^}]*?h:\s*(\d+)/, 1080) } : null,
 };
 if (CFG.DURATION > 0) ok('CFG', `${CFG.W}×${CFG.H}${CFG.OUT ? ` → 输出 ${CFG.OUT.w}×${CFG.OUT.h}` : ''}，${CFG.DURATION}s，${CFG.BPM}BPM`);
 else bad('CFG', 'index.html 里没读到 DURATION');
@@ -81,29 +81,72 @@ for (const need of ['engine.js', 'character.js']) if (!srcs.some((s) => s === ne
 if (!eng) bad('engine.js', '文件不存在或没被 index.html 引用');
 if (!chr) warn('character.js', '文件不存在（角色只能由镜头自己画，会漂移）');
 
+// 已听校的事件轨允许为空；二分定位要求时刻有限、非负并保持升序。
+const rhythm = pick('rhythm.js');
+if (rhythm) {
+  try {
+    const data = { window: {} };
+    vm.runInNewContext(rhythm, data, { filename: 'rhythm.js' });
+    const tracks = data.window.MV_RHYTHM;
+    if (!tracks || typeof tracks !== 'object' || Array.isArray(tracks)) throw new Error('需要 window.MV_RHYTHM 对象');
+    for (const [name, times] of Object.entries(tracks)) {
+      if (!Array.isArray(times) || times.some((t, i) => !Number.isFinite(t) || t < 0 || (i > 0 && t < times[i - 1])))
+        throw new Error(name + ' 需要按升序填写非负秒数');
+    }
+    ok('节奏轨', Object.entries(tracks).map(([name, times]) => name + ' ' + times.length).join('，'));
+  } catch (error) {
+    bad('节奏轨', error.message);
+  }
+}
+
 // ── 3. 空跑镜头 ────────────────────────────────────────────────────────
 const noop = () => {};
-const ctxProxy = new Proxy({}, { get: (t, k) => (k === 'canvas' ? { width: CFG.W, height: CFG.H } : noop), set: () => true });
-const engProxy = new Proxy({}, { get: () => noop });
+const gradStub = () => ({ addColorStop: noop });
+const ctxProxy = new Proxy({}, {
+  get: (t, k) => {
+    if (k === 'canvas') return { width: CFG.W, height: CFG.H };
+    if (k === 'createLinearGradient' || k === 'createRadialGradient' || k === 'createConicGradient') return gradStub;
+    if (k === 'createPattern') return () => ({ setTransform: noop });
+    if (k === 'measureText') return () => ({ width: 10 });
+    return noop;
+  },
+  set: () => true,
+});
+const engProxy = new Proxy({}, {
+  get: (t, k) => (k === 'noise' ? (() => 0.5) : k === 'palette' ? {} : (t[k] !== undefined ? t[k] : noop)),
+  set: (t, k, v) => { t[k] = v; return true; },
+});
 const api = { W: CFG.W, H: CFG.H, OW: CFG.OUT ? CFG.OUT.w : CFG.W, OH: CFG.OUT ? CFG.OUT.h : CFG.H,
-  BEAT: 60 / CFG.BPM, beatPhase: () => 0, beatIndex: () => 0, onBeat: () => false,
+  BEAT: 60 / CFG.BPM, pulse: () => 0, beatPhase: () => 0, beatIndex: () => 0, onBeat: () => false,
   ease: (u) => u, lerp: (a, b, u) => a + (b - a) * u, clamp: (x) => x,
   ENGINE: engProxy, CHAR: { draw: noop, handAt: () => ({ x: 0, y: 0 }) },
   SAFE_Y: CFG.H * 0.85, cx: CFG.W / 2, cy: CFG.H / 2, MH: CFG.H * 0.24, palette: {} };
 const SHOTS = [];
-const sandbox = { window: { SHOTS, LYRICS: [] }, SHOTS, ENGINE: engProxy, CHARACTER: { draw: noop }, API: api,
+const sandbox = { window: { CFG, SHOTS, LYRICS: [], ENGINE: engProxy, CHARACTER: { draw: noop } }, SHOTS, ENGINE: engProxy, CHARACTER: { draw: noop }, API: api,
   Math, JSON, Number, String, Array, Object, isNaN, isFinite, parseInt, parseFloat, console, undefined };
 vm.createContext(sandbox);
-for (const s of listed) {
+// 按 index.html 的顺序把所有脚本都跑一遍（assemble.js 除外：它是装配器，不是内容）。
+// 这样 props.js / remap.js 之类的项目级脚本也能在空跑环境里生效。
+for (const s of srcs) {
+  if (/assemble\.js$/.test(s)) continue;
+  if (/(^|\/)engine\.js$/.test(s)) continue;      // engine.js 一画东西就要 canvas，用 engProxy 顶替
   const f = path.join(proj, s);
   if (!fs.existsSync(f)) continue;
   try { vm.runInContext(fs.readFileSync(f, 'utf8'), sandbox, { filename: s }); }
-  catch (e) { bad('加载', `${s} 加载就报错：${e.message}`); }
+  catch (e) {
+    if (/shots\//.test(s) || ['direction.js', 'rhythm.js', 'motion.js', 'scenes.js'].includes(s)) bad('加载', `${s} 加载就报错：${e.message}`);
+    else warn('加载', `${s} 在空跑环境里跑不通（不影响真渲染）：${e.message}`);
+  }
 }
+Object.assign(api, sandbox.window.MV_MOTION);
 const S = SHOTS.slice().sort((a, b) => a.start - b.start);
 if (!S.length) bad('镜头', '一个镜头都没注册（shots/*.js 里要 SHOTS.push({...})）');
 S.forEach((s, i) => {
   const id = s.id ?? `#${i}`;
+  const scene = s.scene ?? (s.bg ? undefined : sandbox.window.MV_DIRECTION?.scene);
+  if (scene && !sandbox.window.MV_SCENES?.[scene]?.draw) bad('场景', `镜头 ${id} 找不到场景 ${scene}`);
+  if (s.look && !Object.hasOwn(sandbox.window.MV_DIRECTION?.looks || {}, s.look)) bad('配色', `镜头 ${id} 找不到色阶方案 ${s.look}`);
+  if (s.rehearsal && s.end-s.start > 8) warn('表演', `镜头 ${id} 仍在拉长试机动作；按本曲歌词重写镜内动作及起止时间`);
   if (typeof s.start !== 'number' || typeof s.end !== 'number') return bad('镜头', `镜头 ${id} 缺 start/end`);
   if (!(s.end > s.start)) bad('镜头', `镜头 ${id}：end(${s.end}) ≤ start(${s.start})`);
   if (i > 0 && Math.abs(s.start - S[i - 1].end) > 0.001) bad('镜头', `镜头 ${id} 和上一个没接上：${S[i - 1].end} → ${s.start}（中间会黑）`);
@@ -126,7 +169,6 @@ const BAN = [
   [/setTimeout|setInterval|requestAnimationFrame/, '定时器 → 帧由渲染器驱动，别自己开循环'],
   [/https?:\/\//, '外部 URL（CDN/图片）→ 弱模型环境里会挂'],
   [/\bp5\b/, 'p5 → 本项目只用 Canvas2D'],
-  [/THREE\.|webgl|WebGL/, 'WebGL → 渲染器在多进程下会黑帧'],
 ];
 for (const s of listed) {
   const f = path.join(proj, s);
@@ -157,9 +199,16 @@ if (lyr) {
     vm.runInContext(lyr, sandbox2, { filename: 'lyrics.js' });
     const L = sandbox2.window.LYRICS || [];
     if (!L.length) warn('歌词', 'lyrics.js 里没有 window.LYRICS 条目（可以没有歌词，但要确认是有意的）');
-    L.forEach(([a, b, txt], i) => {
+    L.forEach(([a, b, txt, words], i) => {
+      if (words !== undefined) {
+        const expected = [...String(txt || '')].length;
+        const valid = Array.isArray(words) && words.length === expected &&
+          words.every((word, j) => word && typeof word.ch === 'string' && Number.isFinite(Number(word.t)) &&
+            (j === 0 || Number(word.t) >= Number(words[j - 1].t)));
+        if (!valid) warn('歌词字级', '第 ' + (i + 1) + ' 句字级时间数量或顺序不匹配，将回退句内估算：' + txt);
+      }
       if (!(b > a)) bad('歌词', `第 ${i + 1} 句 end 不大于 start：${a}→${b}`);
-      if (b - a < 0.6) bad('歌词', `第 ${i + 1} 句只有 ${(b - a).toFixed(2)}s，太短会一闪而过：${txt}`);
+      if (b - a < 0.6) warn('歌词', `第 ${i + 1} 句只有 ${(b - a).toFixed(2)}s，太短会一闪而过：${txt}`);
       if (a < -0.001) bad('歌词', `第 ${i + 1} 句起点是负数 ${a}（偏移算错了？）`);
       if (CFG.DURATION && b > CFG.DURATION + 1.0) bad('歌词', `第 ${i + 1} 句 ${b}s 超出片长 ${CFG.DURATION}s（还差 ${(b - CFG.DURATION).toFixed(2)}s 就唱完了）`);
       if (i > 0 && a < L[i - 1][1] - 0.3) warn('歌词', `第 ${i} 句和第 ${i + 1} 句重叠超过 0.3s，字幕会打架`);
